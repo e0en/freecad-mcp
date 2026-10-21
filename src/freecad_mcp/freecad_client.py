@@ -158,6 +158,9 @@ class FreeCADConnection:
             for attr, value in budgets.items():
                 setattr(self, attr, value)
 
+    def document_workflow(self, doc_name: str, action: str, options: dict[str, Any]) -> dict[str, Any]:
+        return self._call("document_workflow", doc_name, action, options)
+
     def create_document(self, name: str) -> dict[str, Any]:
         return self._call("create_document", name)
 

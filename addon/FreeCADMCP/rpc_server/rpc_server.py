@@ -228,6 +228,18 @@ class FreeCADRPC:
                 return {"success": True, "job": dict(job)}
             return {"success": True, "jobs": [dict(j) for j in _ASYNC_JOBS.values()]}
 
+    def document_workflow(
+        self, doc_name: str, action: str, options: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Project-independent query/edit dispatched as one GUI task."""
+        from rpc_server.workflow import run
+
+        return _query_on_gui(
+            lambda: run(FreeCAD.getDocument(doc_name), action, options),
+            "document_workflow:" + action,
+            self._generation,
+        )
+
     def create_document(self, name="New_Document"):
         # The GUI handler reports the document's ACTUAL name — FreeCAD
         # sanitises requested names ("My Doc" -> "My_Doc") and de-duplicates

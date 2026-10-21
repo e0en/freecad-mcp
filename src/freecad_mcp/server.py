@@ -1,4 +1,5 @@
 import functools
+import json
 import logging
 import xmlrpc.client
 from contextlib import asynccontextmanager
@@ -48,7 +49,7 @@ from .operations import (
     run_fem_analysis_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
-from .responses import ErrorResponse, ToolResponse
+from .responses import ErrorResponse, ToolResponse, error_response, text_response
 from .server_state import ServerState
 
 
@@ -167,6 +168,97 @@ def _get_freecad_connection_locked() -> FreeCADConnection:
         if notice:
             logger.warning(notice)
     return state.freecad_connection
+
+
+def _workflow(doc_name: str, action: str, **options: Any) -> ToolResponse:
+    result = get_freecad_connection().document_workflow(doc_name, action, options)
+    message = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    if not result.get("success"):
+        return error_response(message)
+    return text_response(message)
+
+
+@tool
+def inspect_document(
+    doc_name: str,
+    objects: list[str] | None = None,
+    properties: list[str] | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    include_property_names: bool = False,
+) -> list[TextContent]:
+    """Read compact paginated object identities and optional scalar properties.
+
+    Use internal Names, not Labels. No screenshot or recompute. Follow next_offset
+    until null. Quantity values use FreeCAD internal units; unit describes dimensions.
+    Use include_property_names to discover available scalar properties.
+    Omit properties to avoid loading property values. Expressions are included
+    for requested properties. Document errors are reported across the document.
+    """
+    return _workflow(
+        doc_name,
+        "inspect",
+        objects=objects,
+        properties=properties,
+        offset=offset,
+        limit=limit,
+        include_property_names=include_property_names,
+    )
+
+
+@tool
+def measure_objects(doc_name: str, objects: list[str]) -> list[TextContent]:
+    """Measure 1–200 explicit object Names in document coordinates.
+
+    Returns volume mm³, area mm², bounds/size mm and topology counts. Two objects
+    also return minimum shape distance mm. Select final Bodies or solids, not
+    their historical features. No recompute, screenshots, tessellation or saving.
+    """
+    return _workflow(doc_name, "measure", objects=objects)
+
+
+@tool
+def check_document(
+    doc_name: str,
+    objects: list[str],
+    collisions: bool = False,
+    tolerance_mm3: float = 1e-6,
+) -> list[TextContent]:
+    """Check explicit final parts/sketches and document errors, without exports.
+
+    Checks valid single solids and fully constrained sketches. Other objects are
+    skipped and cannot pass. Optional pairwise volumetric overlaps use mm³;
+    touching faces are permitted. Select final parts, avoiding Body/Tip duplicates.
+    Checks current state only: does not recompute or prove mesh/print/physical quality.
+    Response success means execution succeeded; passed is the CAD check verdict.
+    """
+    return _workflow(
+        doc_name,
+        "check",
+        objects=objects,
+        collisions=collisions,
+        tolerance_mm3=tolerance_mm3,
+    )
+
+
+@tool
+def update_parameters(
+    doc_name: str, changes: list[dict[str, Any]]
+) -> list[TextContent]:
+    """Atomically edit 1–200 existing scalar parameters, with one final recompute.
+
+    Each change has object (internal Name), property and value or expression.
+    Values may be numbers, booleans, strings or quantities such as "12 mm".
+    Example: [{"object":"Dimensions","property":"Width","value":"32 mm"}].
+    To replace a driven value, explicitly pass expression:null with value.
+    Existing transactions and UndoMode=0 are rejected. Failed edits/recompute/
+    invalid shapes abort the transaction; inspect rolled_back on errors. Returns
+    edited property values/expressions and edit/recompute/total milliseconds.
+    No screenshot, export or saving. FeaturePython external side effects cannot
+    be rolled back; use ordinary document-owned parameters. Use execute_code for
+    topology changes, preserving PartDesign history; never run edits asynchronously.
+    """
+    return _workflow(doc_name, "update", changes=changes)
 
 
 @tool

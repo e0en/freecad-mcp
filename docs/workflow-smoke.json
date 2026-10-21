@@ -1,0 +1,16 @@
+{
+  "transport": "MCP stdio \u2192 XML-RPC \u2192 FreeCAD GUI thread",
+  "tools": [
+    "check_document",
+    "inspect_document",
+    "measure_objects",
+    "update_parameters"
+  ],
+  "passed": true,
+  "rollback_tool_error_verified": true,
+  "sample_update_timings": {
+    "edit_ms": 0.7357900030910969,
+    "recompute_ms": 1.3311629882082343,
+    "validation_ms": 0.7321630255319178
+  }
+}

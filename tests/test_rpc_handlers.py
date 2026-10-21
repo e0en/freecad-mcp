@@ -639,3 +639,23 @@ def test_async_start_does_not_wait_for_a_busy_gui_thread(rpc_module: types.Modul
     finally:
         release.set()
         busy.join(timeout=5)
+
+
+def test_workflow_dispatches_once_with_document_and_scope(rpc_module, monkeypatch):
+    import sys
+    import types
+
+    calls = []
+    monkeypatch.setitem(
+        sys.modules,
+        "rpc_server.workflow",
+        types.SimpleNamespace(
+            run=lambda doc, action, options: calls.append((doc, action, options))
+            or {"success": True}
+        ),
+    )
+    rpc = rpc_module.FreeCADRPC()
+    assert rpc.document_workflow("Doc", "inspect", {"limit": 3}) == {"success": True}
+    assert calls == [(rpc_module.FreeCAD.getDocument("Doc"), "inspect", {"limit": 3})]
+    with pytest.raises(Fault, match="Missing"):
+        rpc.document_workflow("Missing", "inspect", {})

@@ -1,0 +1,51 @@
+{
+  "freecad": [
+    "1",
+    "1",
+    "3",
+    "20260725 (Git shallow)",
+    "Unknown",
+    "2026/07/25 04:52:02",
+    "grafted,grafted",
+    "145529fe741292ff0b3977a01195bf0247425794"
+  ],
+  "geometry_validation": {
+    "passed": 21,
+    "checks": [
+      "pagination",
+      "parameter discovery",
+      "expression discovery",
+      "queries do not edit document",
+      "shape distance",
+      "container global coordinates",
+      "PartDesign body measurement",
+      "batch edits and dependent recompute",
+      "one undo entry",
+      "single undo restores batch",
+      "driven value overwrite rejected",
+      "runtime failure rolls back values and geometry",
+      "explicit expression removal",
+      "expression edit",
+      "invalid recompute rolls back geometry and expression",
+      "rollback restores original expression",
+      "existing user transaction preserved",
+      "solid sketch and no-overlap checks",
+      "overlap detected",
+      "unsupported object cannot pass",
+      "compact response smaller than full serialization"
+    ],
+    "sample_response_bytes": {
+      "legacy": 20272,
+      "compact": 1595
+    },
+    "sample_ms": {
+      "legacy_serialization": 3.824676969088614,
+      "compact_inspect": 0.06662699161097407
+    }
+  },
+  "limits": [
+    "Synthetic small fixture; response bytes are not token counts",
+    "Single in-process timings, not end-to-end benchmark",
+    "Assembly Link transforms and scaled instances unvalidated"
+  ]
+}
