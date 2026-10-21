@@ -8,9 +8,10 @@
   ],
   "passed": true,
   "rollback_tool_error_verified": true,
+  "filtered_queries_and_clearance_summary_verified": true,
   "sample_update_timings": {
-    "edit_ms": 0.7260010461322963,
-    "recompute_ms": 1.1929409811273217,
-    "validation_ms": 0.71389798540622
+    "edit_ms": 0.7490789867006242,
+    "recompute_ms": 1.2063499889336526,
+    "validation_ms": 0.7245810120366514
   }
 }

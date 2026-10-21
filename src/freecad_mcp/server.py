@@ -186,12 +186,15 @@ def inspect_document(
     offset: int = 0,
     limit: int = 50,
     include_property_names: bool = False,
+    type_ids: list[str] | None = None,
+    name_pattern: str | None = None,
 ) -> list[TextContent]:
     """Read compact paginated object identities and optional scalar properties.
 
     Use internal Names, not Labels. No screenshot or recompute. Follow next_offset
     until null. Quantity values use FreeCAD internal units; unit describes dimensions.
     Use include_property_names to discover available scalar properties.
+    Filter exact type_ids and glob name_pattern before pagination.
     Omit properties to avoid loading property values. Expressions are included
     for requested properties. Document errors are reported across the document.
     """
@@ -203,6 +206,8 @@ def inspect_document(
         offset=offset,
         limit=limit,
         include_property_names=include_property_names,
+        type_ids=type_ids,
+        name_pattern=name_pattern,
     )
 
 
@@ -212,7 +217,8 @@ def measure_objects(doc_name: str, objects: list[str]) -> list[TextContent]:
 
     Returns volume mm³, area mm², bounds/size mm and topology counts. Two objects
     also return minimum shape distance mm. Select final Bodies or solids, not
-    their historical features. No recompute, screenshots, tessellation or saving.
+    their historical features. Reports document errors and pending recompute so
+    stale shapes are visible. No recompute, screenshots, tessellation or saving.
     """
     return _workflow(doc_name, "measure", objects=objects)
 
@@ -223,6 +229,9 @@ def check_document(
     objects: list[str],
     collisions: bool = False,
     tolerance_mm3: float = 1e-6,
+    minimum_clearance_mm: float | None = None,
+    details: Literal["all", "failures", "summary"] = "all",
+    max_details: int = 200,
 ) -> list[TextContent]:
     """Check explicit final parts/sketches and document errors, without exports.
 
@@ -230,6 +239,10 @@ def check_document(
     skipped and cannot pass. Optional pairwise volumetric overlaps use mm³;
     touching faces are permitted. Select final parts, avoiding Body/Tip duplicates.
     Checks current state only: does not recompute or prove mesh/print/physical quality.
+    Optionally require minimum_clearance_mm > 0 between shapes. Bounding boxes
+    prune exact operations conservatively. details selects all/failures/summary;
+    max_details caps each list (0–200). All inputs are checked in every mode;
+    summary and omitted report complete counts. Pair counts and timings expose cost.
     Response success means execution succeeded; passed is the CAD check verdict.
     """
     return _workflow(
@@ -238,6 +251,9 @@ def check_document(
         objects=objects,
         collisions=collisions,
         tolerance_mm3=tolerance_mm3,
+        minimum_clearance_mm=minimum_clearance_mm,
+        details=details,
+        max_details=max_details,
     )
 
 

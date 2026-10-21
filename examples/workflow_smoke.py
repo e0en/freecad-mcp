@@ -71,6 +71,12 @@ _workflow_smoke_doc.commitTransaction()
                 created = True
                 overview = await query("inspect_document", include_property_names=True)
                 assert overview["total"] == 3
+                filtered = await query(
+                    "inspect_document", type_ids=["Part::Box"], name_pattern="B*"
+                )
+                assert (
+                    filtered["total"] == 1 and filtered["objects"][0]["name"] == "Box"
+                )
                 edited = await query(
                     "update_parameters",
                     changes=[
@@ -85,6 +91,28 @@ _workflow_smoke_doc.commitTransaction()
                     "check_document", objects=["Box", "Other"], collisions=True
                 )
                 assert checked["passed"]
+                brief = await query(
+                    "check_document",
+                    objects=["Box", "Other"],
+                    minimum_clearance_mm=20,
+                    details="summary",
+                )
+                assert (
+                    not brief["passed"]
+                    and brief["summary"]["clearance_violations"] == 1
+                )
+                assert (
+                    not brief["clearance_violations"]
+                    and brief["omitted"]["clearance_violations"] == 1
+                )
+                failures = await query(
+                    "check_document",
+                    objects=["Box", "Other"],
+                    minimum_clearance_mm=20,
+                    details="failures",
+                    max_details=1,
+                )
+                assert failures["clearance_violations"][0]["distance_mm"] == 18
                 failed = await session.call_tool(
                     "update_parameters",
                     {
@@ -116,6 +144,7 @@ _workflow_smoke_doc.commitTransaction()
                             "tools": sorted(expected),
                             "passed": True,
                             "rollback_tool_error_verified": True,
+                            "filtered_queries_and_clearance_summary_verified": True,
                             "sample_update_timings": edited["timings"],
                         },
                         indent=2,

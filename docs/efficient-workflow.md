@@ -27,7 +27,14 @@ checks do not replace reviewing sections, flow paths and assembly views.
 
 Call `inspect_document` and follow `next_offset` until null. Use internal object
 `name`, not its editable `label`, for all requests. Property names are optional;
-request only relevant values:
+request only relevant values. Optional `type_ids` (exact FreeCAD TypeIds) and
+`name_pattern` (case-sensitive glob on internal Names) filter before pagination.
+For example, `{"doc_name":"MyDocument","type_ids":["PartDesign::Body"],"name_pattern":"Leg*"}`
+finds matching Bodies without paging through sketches and historical features.
+Filters combine with explicit `objects`; `total` and `next_offset` describe the
+filtered set. Unknown explicit Names still produce an error.
+
+Request selected values:
 
 ```json
 {"doc_name":"MyDocument","objects":["Dimensions"],"properties":["Width","Wall"]}
@@ -46,7 +53,8 @@ recomputes a document, changes visibility, exports files or creates a mesh.
 
 It returns per-object volume (mm³), area (mm²), axis-aligned bounds/size (mm), and
 solid/face/edge counts. With exactly two objects it also returns minimum shape
-distance (mm). Measurements account for enclosing App::Part placements. Select
+distance (mm). Measurement responses also report document errors and pending
+recompute without modifying the document. Measurements account for enclosing App::Part placements. Select
 final Bodies or solid objects; selecting a Body and its Tip duplicates geometry.
 Meshes, arbitrary workbench objects without Shape, and face/edge selections are
 not supported by this tool. Assembly-specific Link transforms and scaled instances
@@ -109,7 +117,32 @@ Hidden objects are not automatically excluded. No printer, material, clearance,
 fastener or physical requirement is invented.
 
 Overlap tolerance is in mm³ (default 1e-6), not a linear clearance. Touching faces
-are permitted. Use distance measurements for separation. Pairwise tests grow
+are permitted. To require separation, pass `minimum_clearance_mm` with a positive
+value. Equality passes; touching and intersecting solids fail positive clearance.
+This checks nominal CAD geometry, without adding a manufacturing tolerance.
+
+```json
+{"doc_name":"MyDocument","objects":["Housing","Rotor"],"collisions":true,"minimum_clearance_mm":0.3,"details":"failures","max_details":10}
+```
+
+All selected objects and eligible shape pairs are checked before output is reduced:
+
+- `details: "all"` (default) includes passing and failing object rows.
+- `details: "failures"` includes failed/skipped object rows and pair violations.
+- `details: "summary"` returns counts and the verdict without detail rows.
+
+`max_details` caps each detail list at 0–200 rows (default 200), including document
+errors and pending objects. `summary` always gives complete counts. `omitted`
+counts all unreturned entries, including passing object rows excluded by failure
+mode. Truncation cannot turn a failure into a pass. Use explicit smaller selections
+to investigate omitted pairs. Null or empty selections for checks and measurements
+are rejected; only inspection can default to all objects.
+
+Bounding-box separation and overlap volume bound the expensive distance/Boolean
+calculations. Pairs already meeting the clearance and pairs whose overlap cannot
+exceed the volume tolerance skip the corresponding exact calculation. Overlapping
+bounds alone do not imply a collision or inadequate clearance. `boolean_tests`,
+`distance_tests`, pair counts and `timings` report the actual work. Pairwise tests grow
 quadratically; keep the selection focused. A quick subset check does not certify
 the whole assembly. Run project-specific full assembly, motion, insertion/tool
 path, parameter regression, mesh and slicing checks before releasing outputs.
@@ -151,7 +184,14 @@ values, and closes the test document. MCP SDK 1.x and 2.x are supported.
 Local validation records are in [workflow-validation.json](workflow-validation.json),
 [workflow-smoke.json](workflow-smoke.json) (SDK 1.x) and
 [workflow-smoke-mcp2.json](workflow-smoke-mcp2.json) (SDK 2.x).
-The final default test suite passed 71 tests. Ruff passes for the new workflow,
+The extended clearance/filter/summary geometry checks and a reproducible
+80-part pair-loop comparison are in `tests/freecad_workflow_efficiency.py`; run
+its `run()` through the same GUI-thread loader above. Results are recorded in
+[workflow-efficiency.json](workflow-efficiency.json). The synthetic contact fixture
+checks agreement with the earlier pair-loop implementation. Timings are single
+samples, and response byte reduction is not an actual token measurement.
+
+The final default test suite passed 92 tests. Ruff passes for the new workflow,
 wrappers and tests. The existing RPC dispatcher file retains two unused imports
 (`validate_allowed_ips`, `save_settings`); both findings reproduce on its unchanged
 HEAD version. Existing file formatting outside the edited ranges was preserved.

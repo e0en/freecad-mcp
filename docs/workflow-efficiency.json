@@ -1,0 +1,47 @@
+{
+  "freecad": [
+    "1",
+    "1",
+    "3",
+    "20260725 (Git shallow)",
+    "Unknown",
+    "2026/07/25 04:52:02",
+    "grafted,grafted",
+    "145529fe741292ff0b3977a01195bf0247425794"
+  ],
+  "passed": 15,
+  "checks": [
+    "face contact skips Boolean and passes overlap check",
+    "face contact fails positive clearance",
+    "sufficient box separation skips exact distance",
+    "quarter-millimetre gap measured exactly when needed",
+    "overlapping bounds fall back to exact geometry",
+    "ring-to-pin radial gap is one millimetre",
+    "solid containment fails overlap and clearance",
+    "measure exposes stale state without recompute",
+    "bounded reports retain complete verdict and counts",
+    "all fifteen overlaps counted with one detail",
+    "summary omits details without hiding overlap count",
+    "type and name filtering select intended parts",
+    "optimized and baseline overlap verdicts agree",
+    "touching-part fixture eliminates unnecessary Boolean calls",
+    "summary reduces response bytes"
+  ],
+  "fixture": {
+    "parts": 80,
+    "pairs": 3160
+  },
+  "comparison": {
+    "baseline_boolean_tests": 79,
+    "optimized_boolean_tests": 0,
+    "baseline_pair_ms": 128.8218040135689,
+    "optimized_pair_ms": 6.828940997365862,
+    "all_details_bytes": 4354,
+    "summary_bytes": 760
+  },
+  "limits": [
+    "Synthetic fixture and single timing samples, not total agent task time",
+    "Response bytes are not token counts",
+    "Nominal CAD clearance excludes print tolerances"
+  ]
+}

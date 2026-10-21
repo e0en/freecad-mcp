@@ -238,3 +238,168 @@ def test_incomplete_rollback_recompute_is_failure(doc):
     result = workflow.run(doc, "update", {"changes": [edit()]})
     assert not result["success"] and not result["rolled_back"]
     assert result["rollback_errors"][0]["status"] == "Rollback recompute incomplete"
+
+
+def test_filters_apply_before_pagination_and_combine(doc):
+    other = Parameter()
+    other.Name, other.TypeId = "Other", "Part::Box"
+    second = Parameter()
+    second.Name = "Params2"
+    doc.Objects += [other, second]
+    result = workflow.run(
+        doc,
+        "inspect",
+        {"type_ids": ["App::VarSet"], "name_pattern": "Params*", "limit": 1},
+    )
+    assert result["total"] == 2 and result["next_offset"] == 1
+    result = workflow.run(
+        doc,
+        "inspect",
+        {
+            "type_ids": ["App::VarSet"],
+            "name_pattern": "Params*",
+            "limit": 1,
+            "offset": 1,
+        },
+    )
+    assert result["objects"][0]["name"] == "Params2" and result["next_offset"] is None
+    assert not doc.recomputed
+
+
+@pytest.mark.parametrize(
+    "options", [{"type_ids": []}, {"type_ids": [""]}, {"name_pattern": ""}]
+)
+def test_invalid_filters_are_explicit(doc, options):
+    assert not workflow.run(doc, "inspect", options)["success"]
+
+
+def test_failure_after_output_limit_is_still_counted(doc):
+    doc.Objects = []
+    for i in range(5):
+        obj = Parameter()
+        obj.Name = f"Sketch{i}"
+        obj.TypeId = "Sketcher::SketchObject"
+        obj.FullyConstrained = i < 4
+        doc.Objects.append(obj)
+    full = workflow.run(
+        doc, "check", {"objects": [o.Name for o in doc.Objects], "max_details": 1}
+    )
+    assert not full["passed"] and full["summary"]["failed_objects"] == 1
+    assert full["omitted"]["objects"] == 4
+    failures = workflow.run(
+        doc,
+        "check",
+        {
+            "objects": [o.Name for o in doc.Objects],
+            "details": "failures",
+            "max_details": 1,
+        },
+    )
+    assert failures["objects"] == [{"name": "Sketch4", "fully_constrained": False}]
+    summary = workflow.run(
+        doc, "check", {"objects": [o.Name for o in doc.Objects], "details": "summary"}
+    )
+    assert not summary["passed"] and not summary["objects"]
+    assert summary["summary"] == full["summary"] and summary["omitted"]["objects"] == 5
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"minimum_clearance_mm": v} for v in [0, -1, float("nan"), float("inf")]]
+    + [{"max_details": v} for v in [-1, 201, True, 1.5]]
+    + [{"details": "unknown"}],
+)
+def test_invalid_check_options_rejected(doc, options):
+    assert not workflow.run(doc, "check", {"objects": ["Params"], **options})["success"]
+
+
+def test_global_error_counts_survive_summary_and_zero_limit(doc):
+    doc.Objects[0].State = ["Invalid", "Touched"]
+    report = workflow.run(doc, "check", {"objects": ["Params"], "max_details": 0})
+    assert not report["passed"]
+    assert (
+        report["summary"]["document_errors"]
+        == report["summary"]["pending_recompute"]
+        == 1
+    )
+    assert not report["document_errors"] and report["omitted"]["document_errors"] == 1
+
+
+def test_clearance_broad_phase_and_exact_fallback(doc, monkeypatch):
+    class Shape:
+        Solids = [object()]
+
+        def __init__(self, xmin, xmax):
+            self.BoundBox = SimpleNamespace(
+                XMin=xmin, XMax=xmax, YMin=0, YMax=10, ZMin=0, ZMax=10
+            )
+            self.booleans = self.distances = 0
+
+        def isNull(self):
+            return False
+
+        def isValid(self):
+            return True
+
+        def common(self, other):
+            self.booleans += 1
+            return SimpleNamespace(Volume=0)
+
+        def distToShape(self, other):
+            self.distances += 1
+            return (0.4,)
+
+    a, b = Parameter(), Parameter()
+    a.Name, b.Name = "A", "B"
+    a.Shape, b.Shape = Shape(0, 10), Shape(20, 30)
+    doc.Objects = [a, b]
+    monkeypatch.setattr(workflow, "_shape", lambda obj: obj.Shape)
+    options = {"objects": ["A", "B"], "collisions": True, "minimum_clearance_mm": 1}
+    far = workflow.run(doc, "check", options)
+    assert far["passed"] and far["boolean_tests"] == far["distance_tests"] == 0
+    # Exact gap at the requested boundary is sufficient; no distance call needed.
+    b.Shape = Shape(11, 21)
+    boundary = workflow.run(doc, "check", options)
+    assert boundary["passed"] and boundary["distance_tests"] == 0
+    # Intersecting bounds alone cannot decide actual surface separation.
+    b.Shape = Shape(5, 15)
+    near = workflow.run(doc, "check", options)
+    assert not near["passed"] and near["distance_tests"] == near["boolean_tests"] == 1
+    assert near["clearance_violations"][0]["distance_mm"] == 0.4
+    assert a.Shape.distances == a.Shape.booleans == 1
+
+
+def test_touching_bounds_skip_boolean_but_not_clearance(doc, monkeypatch):
+    a, b = Parameter(), Parameter()
+    a.Name, b.Name = "A", "B"
+
+    def shape(xmin, xmax):
+        return SimpleNamespace(
+            isNull=lambda: False,
+            isValid=lambda: True,
+            Solids=[1],
+            BoundBox=SimpleNamespace(
+                XMin=xmin, XMax=xmax, YMin=0, YMax=10, ZMin=0, ZMax=10
+            ),
+            distToShape=lambda other: (0.0,),
+        )
+
+    a.Shape, b.Shape = shape(0, 10), shape(10, 20)
+    doc.Objects = [a, b]
+    monkeypatch.setattr(workflow, "_shape", lambda obj: obj.Shape)
+    report = workflow.run(
+        doc,
+        "check",
+        {"objects": ["A", "B"], "collisions": True, "minimum_clearance_mm": 0.1},
+    )
+    assert not report["passed"] and report["boolean_tests"] == 0
+    assert (
+        report["distance_tests"] == 1 and report["summary"]["clearance_violations"] == 1
+    )
+
+
+@pytest.mark.parametrize("action", ["check", "measure"])
+@pytest.mark.parametrize("objects", [None, []])
+def test_explicit_nonempty_selection_required(doc, action, objects):
+    result = workflow.run(doc, action, {"objects": objects})
+    assert not result["success"]

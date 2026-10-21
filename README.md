@@ -21,7 +21,9 @@ run Python scripts, inspect documents, and run FEM analyses.
 
 Use `inspect_document`, `measure_objects`, `check_document`, and
 `update_parameters` for compact project-independent work without intermediate
-screenshots or STL exports. Parameter batches recompute once and roll back failed
+screenshots or STL exports. Filter object identities by type/name, request bounded
+failure summaries, and check nominal clearance while skipping unnecessary exact
+geometry operations. Parameter batches recompute once and roll back failed
 edits. See [the workflow guide](docs/efficient-workflow.md) for installation,
 examples, units, validation scope and recovery behavior.
 

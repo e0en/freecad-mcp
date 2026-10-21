@@ -4,6 +4,7 @@ Called on the GUI thread. Queries never recompute, mesh, save, or change views.
 All lengths/areas/volumes use FreeCAD's internal mm/mm²/mm³ units.
 """
 
+from fnmatch import fnmatchcase
 from itertools import combinations
 import math
 from time import perf_counter
@@ -24,9 +25,11 @@ SCALAR_TYPES = {
 }
 
 
-def _select(doc, names):
+def _select(doc, names, allow_all=False):
     if names is None:
-        return list(doc.Objects)
+        if allow_all:
+            return list(doc.Objects)
+        raise ValueError("Explicit nonempty object Names are required")
     if not names or len(names) != len(set(names)):
         raise ValueError("objects must be a nonempty list of unique internal Names")
     result = []
@@ -65,12 +68,27 @@ def _value(value):
 
 
 def inspect_document(
-    doc, objects=None, properties=None, offset=0, limit=50, include_property_names=False
+    doc,
+    objects=None,
+    properties=None,
+    offset=0,
+    limit=50,
+    include_property_names=False,
+    type_ids=None,
+    name_pattern=None,
 ):
     """Page through object identities; opt into named scalar properties."""
     if offset < 0 or not 1 <= limit <= 200:
         raise ValueError("offset >= 0 and 1 <= limit <= 200 required")
-    selected = _select(doc, objects)
+    selected = _select(doc, objects, allow_all=True)
+    if type_ids is not None:
+        if not type_ids or not all(isinstance(t, str) and t for t in type_ids):
+            raise ValueError("type_ids must be a nonempty list of exact TypeIds")
+        selected = [obj for obj in selected if obj.TypeId in type_ids]
+    if name_pattern is not None:
+        if not isinstance(name_pattern, str) or not name_pattern:
+            raise ValueError("name_pattern must be a nonempty glob for internal Names")
+        selected = [obj for obj in selected if fnmatchcase(obj.Name, name_pattern)]
     rows = []
     for obj in selected[offset : offset + limit]:
         row = {"name": obj.Name, "label": obj.Label, "type": obj.TypeId}
@@ -137,20 +155,66 @@ def measure_objects(doc, objects):
     if len(selected) > 200:
         raise ValueError("Measure at most 200 objects per request")
     shapes = [_shape(obj) for obj in selected]
-    result = {"objects": [_metrics(o, s) for o, s in zip(selected, shapes)]}
+    result = {
+        "objects": [_metrics(o, s) for o, s in zip(selected, shapes)],
+        "document_errors": _errors(doc),
+        "pending_recompute": _pending(doc),
+    }
     if len(shapes) == 2:
         result["minimum_distance_mm"] = shapes[0].distToShape(shapes[1])[0]
     return result
 
 
-def check_document(doc, objects, collisions=False, tolerance_mm3=1e-6):
-    """Check explicit final parts; do not guess solids from visibility/history."""
+def _failed(row):
+    return bool(row.get("skipped")) or not row.get(
+        "valid_single_solid", row.get("fully_constrained", False)
+    )
+
+
+def _box_relation(a, b):
+    """Conservative separation lower bound and overlap-volume upper bound."""
+    gaps, overlap = [], 1.0
+    for axis in ("X", "Y", "Z"):
+        amin, amax = getattr(a, axis + "Min"), getattr(a, axis + "Max")
+        bmin, bmax = getattr(b, axis + "Min"), getattr(b, axis + "Max")
+        gaps.append(max(amin - bmax, bmin - amax, 0.0))
+        overlap *= max(min(amax, bmax) - max(amin, bmin), 0.0)
+    return math.hypot(*gaps), overlap
+
+
+def check_document(
+    doc,
+    objects,
+    collisions=False,
+    tolerance_mm3=1e-6,
+    minimum_clearance_mm=None,
+    details="all",
+    max_details=200,
+):
+    """Check explicit final parts with bounded output and optional clearance.
+
+    Every selected object/pair is evaluated regardless of detail mode or limit.
+    The nominal shape separation must be >= minimum_clearance_mm when requested.
+    """
     if not math.isfinite(tolerance_mm3) or tolerance_mm3 < 0:
         raise ValueError("tolerance_mm3 must be finite and nonnegative")
+    if minimum_clearance_mm is not None and (
+        not math.isfinite(minimum_clearance_mm) or minimum_clearance_mm <= 0
+    ):
+        raise ValueError("minimum_clearance_mm must be finite and positive")
+    if details not in ("all", "failures", "summary"):
+        raise ValueError("details must be all, failures or summary")
+    if (
+        isinstance(max_details, bool)
+        or not isinstance(max_details, int)
+        or not 0 <= max_details <= 200
+    ):
+        raise ValueError("max_details must be an integer between 0 and 200")
     selected = _select(doc, objects)
     if len(selected) > 200:
         raise ValueError("Check at most 200 objects per request")
     rows, shapes = [], []
+    started = perf_counter()
     for obj in selected:
         row = {"name": obj.Name}
         if obj.TypeId == "Sketcher::SketchObject":
@@ -161,36 +225,78 @@ def check_document(doc, objects, collisions=False, tolerance_mm3=1e-6):
             else:
                 shape = _shape(obj)
                 row["valid_single_solid"] = shape.isValid() and len(shape.Solids) == 1
-                shapes.append((obj, shape))
+                shapes.append((obj, shape, shape.BoundBox))
         else:
             row["skipped"] = "No Shape or sketch constraint state"
         rows.append(row)
-    overlaps = []
-    tested = 0
-    if collisions:
-        for (a, sa), (b, sb) in combinations(shapes, 2):
+    validity_ms = (perf_counter() - started) * 1000
+    overlaps, clearance_violations = [], []
+    tested = boolean_tests = distance_tests = 0
+    started = perf_counter()
+    if collisions or minimum_clearance_mm is not None:
+        for (a, sa, ba), (b, sb, bb) in combinations(shapes, 2):
             tested += 1
-            if sa.BoundBox.intersect(sb.BoundBox):
+            lower_distance, upper_volume = _box_relation(ba, bb)
+            if collisions and upper_volume > tolerance_mm3:
+                boolean_tests += 1
                 volume = sa.common(sb).Volume
                 if volume > tolerance_mm3:
                     overlaps.append({"a": a.Name, "b": b.Name, "volume_mm3": volume})
-    errors = _errors(doc)
+            if (
+                minimum_clearance_mm is not None
+                and lower_distance < minimum_clearance_mm
+            ):
+                distance_tests += 1
+                distance = sa.distToShape(sb)[0]
+                if distance < minimum_clearance_mm:
+                    clearance_violations.append(
+                        {"a": a.Name, "b": b.Name, "distance_mm": distance}
+                    )
+    pair_ms = (perf_counter() - started) * 1000
+    errors, pending = _errors(doc), _pending(doc)
+    failed = [row for row in rows if _failed(row)]
+    full = {
+        "objects": rows,
+        "document_errors": errors,
+        "pending_recompute": pending,
+        "collisions": overlaps,
+        "clearance_violations": clearance_violations,
+    }
+    output = {
+        key: (failed if key == "objects" and details == "failures" else values)[
+            :max_details
+        ]
+        if details != "summary"
+        else []
+        for key, values in full.items()
+    }
     return {
         "passed": not errors
-        and not _pending(doc)
+        and not pending
         and not overlaps
-        and all(
-            not r.get("skipped")
-            and r.get("valid_single_solid", r.get("fully_constrained", False))
-            for r in rows
-        ),
-        "document_errors": errors,
-        "pending_recompute": _pending(doc),
-        "objects": rows,
-        "collisions": overlaps,
-        "collision_pairs_tested": tested,
+        and not clearance_violations
+        and not failed,
+        **output,
+        "summary": {
+            "checked_objects": len(rows),
+            "failed_objects": len(failed),
+            "document_errors": len(errors),
+            "pending_recompute": len(pending),
+            "collisions": len(overlaps),
+            "clearance_violations": len(clearance_violations),
+        },
+        "details": details,
+        "omitted": {
+            key: len(values) - len(output[key]) for key, values in full.items()
+        },
+        "collision_pairs_tested": tested if collisions else 0,
+        "clearance_pairs_tested": tested if minimum_clearance_mm is not None else 0,
+        "boolean_tests": boolean_tests,
+        "distance_tests": distance_tests,
         "collisions_checked": collisions,
         "tolerance_mm3": tolerance_mm3,
+        "minimum_clearance_mm": minimum_clearance_mm,
+        "timings": {"validity_ms": validity_ms, "pair_checks_ms": pair_ms},
         "evidence": "Current in-memory CAD only; no recompute, mesh, slicing or physical validation",
     }
 
