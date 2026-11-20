@@ -158,6 +158,9 @@ class FreeCADConnection:
             for attr, value in budgets.items():
                 setattr(self, attr, value)
 
+    def get_report_view(self, max_chars: int = 20000) -> dict[str, Any]:
+        return self._call("get_report_view", max_chars)
+
     def document_workflow(self, doc_name: str, action: str, options: dict[str, Any]) -> dict[str, Any]:
         return self._call("document_workflow", doc_name, action, options)
 

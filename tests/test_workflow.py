@@ -403,3 +403,113 @@ def test_touching_bounds_skip_boolean_but_not_clearance(doc, monkeypatch):
 def test_explicit_nonempty_selection_required(doc, action, objects):
     result = workflow.run(doc, action, {"objects": objects})
     assert not result["success"]
+
+
+def test_sketch_inventory_reads_all_constraint_kinds_without_solver(doc):
+    sketch = doc.Objects[0]
+    sketch.TypeId = "Sketcher::SketchObject"
+    sketch.FullyConstrained = False
+    sketch.OutList = []
+    sketch.InList = []
+    sketch.PropertiesList = ["AttachmentSupport"]
+    sketch.AttachmentSupport = [
+        (SimpleNamespace(Name="Plane", Document=doc), ["Face1"])
+    ]
+    sketch.Constraints = [
+        SimpleNamespace(
+            Name=name,
+            Type=kind,
+            Value=5.0,
+            Driving=driving,
+            First=0,
+            FirstPos=3,
+            Second=-1,
+            SecondPos=1,
+            Third=-2000,
+            ThirdPos=0,
+        )
+        for name, kind, driving in [
+            ("", "Coincident", True),
+            ("Radius", "Radius", False),
+        ]
+    ]
+    sketch.getDriving = lambda _: pytest.fail(
+        "getDriving rejects geometric constraints"
+    )
+    first = workflow.run(doc, "sketch", {"object_name": sketch.Name, "limit": 1})
+    second = workflow.run(doc, "sketch", {"object_name": sketch.Name, "offset": 1})
+    assert first["constraints"][0]["type"] == "Coincident"
+    assert first["next_offset"] == 1
+    assert second["constraints"][0]["driving"] is False
+    assert second["next_offset"] is None
+    assert first["attachment_support"][0]["object"] == "Plane"
+    assert first["attachment_property"] == "AttachmentSupport"
+    assert doc.recomputed == doc.opened == 0
+    sketch.PropertiesList = ["Support"]
+    sketch.Support = sketch.AttachmentSupport
+    assert workflow.inspect_sketch(doc, sketch.Name)["attachment_property"] == "Support"
+    sketch.PropertiesList = []
+    assert workflow.inspect_sketch(doc, sketch.Name)["attachment_support"] == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"object_name": "Missing"},
+        {"object_name": "Params"},
+        {"object_name": "Params", "limit": 201},
+        {"object_name": "Params", "offset": -1},
+    ],
+)
+def test_invalid_sketch_requests(doc, options):
+    assert not workflow.run(doc, "sketch", options)["success"]
+    assert doc.recomputed == 0
+
+
+def test_inspection_exposes_dimensionless_float_and_quantity_unit(doc):
+    doc.Objects[0].Height = SimpleNamespace(Value=20.0, Unit="mm")
+    result = workflow.inspect_document(doc, properties=["Width", "Height"])
+    properties = result["objects"][0]["properties"]
+    assert properties["Width"]["unit"] is None
+    assert properties["Height"]["unit"] == "mm"
+
+
+def test_diagnostic_tools_route_and_preserve_failures(monkeypatch):
+    import json
+
+    from freecad_mcp import server
+
+    calls = []
+    monkeypatch.setattr(
+        server,
+        "get_freecad_connection",
+        lambda: SimpleNamespace(
+            document_workflow=lambda *args: calls.append(args) or {"success": True},
+            get_report_view=lambda limit: {
+                "success": True,
+                "text": "trace",
+                "omitted_chars": 7,
+            },
+        ),
+    )
+    server.inspect_sketch("Doc", "Profile", offset=4, limit=9)
+    assert calls == [
+        ("Doc", "sketch", {"object_name": "Profile", "offset": 4, "limit": 9})
+    ]
+    assert json.loads(server.get_report_view(5)[0].text)["omitted_chars"] == 7
+    monkeypatch.setattr(
+        server,
+        "get_freecad_connection",
+        lambda: SimpleNamespace(
+            get_report_view=lambda limit: {
+                "success": False,
+                "error": "Report view is unavailable",
+            },
+        ),
+    )
+    failed = server.get_report_view()
+    assert failed.isError
+    assert json.loads(failed.content[0].text) == {
+        "success": False,
+        "error": "Report view is unavailable",
+    }

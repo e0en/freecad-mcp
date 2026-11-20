@@ -173,8 +173,10 @@ def execute_code_async_operation(
             if not job_id:
                 return text_response(
                     "Code execution started in background.\n"
-                    "This addon does not report job IDs; use get_object to poll "
-                    "a document status object and inspect FreeCAD's Report View for errors."
+                    "This addon does not report job IDs. Store results and completion state in Python "
+                    "variables and read them with execute_code on the GUI thread. For scripts that "
+                    "already maintain a document status object, poll it with get_object. "
+                    "Inspect FreeCAD's Report View for errors."
                 )
             return text_response(
                 f"Code execution started in background (job_id: {job_id}).\n"

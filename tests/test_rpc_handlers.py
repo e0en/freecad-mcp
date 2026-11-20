@@ -659,3 +659,30 @@ def test_workflow_dispatches_once_with_document_and_scope(rpc_module, monkeypatc
     assert calls == [(rpc_module.FreeCAD.getDocument("Doc"), "inspect", {"limit": 3})]
     with pytest.raises(Fault, match="Missing"):
         rpc.document_workflow("Missing", "inspect", {})
+
+
+def test_report_view_is_dispatched_to_gui(rpc_module, monkeypatch):
+    calls = []
+    window, qt = object(), object()
+    monkeypatch.setattr(sys.modules["PySide"], "QtWidgets", qt, raising=False)
+    monkeypatch.setattr(
+        rpc_module.FreeCADGui, "getMainWindow", lambda: window, raising=False
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "rpc_server.diagnostics",
+        types.SimpleNamespace(
+            read_report_view=lambda *args: (
+                calls.append(args) or {"success": True, "text": "trace"}
+            )
+        ),
+    )
+    operations = []
+    monkeypatch.setattr(
+        rpc_module,
+        "dispatch_to_gui",
+        lambda task, **kw: operations.append(kw["operation_name"]) or task(),
+    )
+    assert rpc_module.FreeCADRPC().get_report_view(42)["text"] == "trace"
+    assert operations == ["get_report_view"]
+    assert calls == [(window, qt, 42)]

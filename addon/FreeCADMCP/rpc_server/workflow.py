@@ -108,6 +108,9 @@ def inspect_document(
                     "type": obj.getTypeIdOfProperty(name),
                     "value": _value(getattr(obj, name)),
                     "expression": expressions.get(name),
+                    "unit": str(getattr(obj, name).Unit)
+                    if hasattr(getattr(obj, name), "Unit")
+                    else None,
                 }
         rows.append(row)
     end = offset + len(rows)
@@ -116,6 +119,62 @@ def inspect_document(
         "total": len(selected),
         "objects": rows,
         "next_offset": end if end < len(selected) else None,
+        "document_errors": _errors(doc),
+        "pending_recompute": _pending(doc),
+    }
+
+
+def inspect_sketch(doc, object_name, offset=0, limit=100):
+    """Read constraints and references without solving or evaluating geometry."""
+    if offset < 0 or not 1 <= limit <= 200:
+        raise ValueError("offset >= 0 and 1 <= limit <= 200 required")
+    sketch = _select(doc, [object_name])[0]
+    if sketch.TypeId != "Sketcher::SketchObject":
+        raise ValueError(f"Not a sketch: {object_name}")
+    constraints = sketch.Constraints
+    rows = [
+        {
+            "index": index,
+            "name": c.Name,
+            "type": c.Type,
+            "value": c.Value,
+            "driving": c.Driving,
+            "first": c.First,
+            "first_pos": c.FirstPos,
+            "second": c.Second,
+            "second_pos": c.SecondPos,
+            "third": c.Third,
+            "third_pos": c.ThirdPos,
+        }
+        for index, c in enumerate(constraints[offset : offset + limit], offset)
+    ]
+    # AttachmentSupport replaced Support for sketches; binders still use Support.
+    support_property = next(
+        (p for p in ("AttachmentSupport", "Support") if p in sketch.PropertiesList),
+        None,
+    )
+    support = getattr(sketch, support_property) if support_property else []
+    end = offset + len(rows)
+    return {
+        "document": doc.Name,
+        "name": sketch.Name,
+        "constraints": rows,
+        "total": len(constraints),
+        "next_offset": end if end < len(constraints) else None,
+        "fully_constrained": bool(sketch.FullyConstrained),
+        "status": sketch.getStatusString(),
+        "sources": [o.Name for o in sketch.OutList],
+        "consumers": [o.Name for o in sketch.InList],
+        "expressions": list(sketch.ExpressionEngine),
+        "attachment_property": support_property,
+        "attachment_support": [
+            {
+                "document": obj.Document.Name,
+                "object": obj.Name,
+                "subelements": list(subs),
+            }
+            for obj, subs in support
+        ],
         "document_errors": _errors(doc),
         "pending_recompute": _pending(doc),
     }
@@ -447,6 +506,7 @@ def run(doc, action, options):
     started = perf_counter()
     handlers = {
         "inspect": inspect_document,
+        "sketch": inspect_sketch,
         "measure": measure_objects,
         "check": check_document,
         "update": update_parameters,

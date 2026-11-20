@@ -195,3 +195,32 @@ The final default test suite passed 92 tests. Ruff passes for the new workflow,
 wrappers and tests. The existing RPC dispatcher file retains two unused imports
 (`validate_allowed_ips`, `save_settings`); both findings reproduce on its unchanged
 HEAD version. Existing file formatting outside the edited ranges was preserved.
+
+## Runtime diagnostics
+
+Use `inspect_sketch` with `doc_name`, `object_name`, and optional `offset`/`limit`
+to read constraints, stored driving flags, attachment targets, source/consumer
+Names, expressions, and current solver status. Follow `next_offset` until null.
+Geometric constraints are included without calling the datum-only `getDriving`
+API. Attachment property differences are handled in the addon. This query does
+not solve the sketch or validate stale geometry.
+
+`inspect_document` includes property types and `unit` for requested properties.
+A null unit means no physical unit is exposed, including `App::PropertyFloat`;
+a geometric label alone does not make a float a length. Use `update_parameters`
+for expression edits: unit errors and cyclic references are failures, with
+rollback status returned. It uses FreeCAD's expression engine, not a parallel
+parser or a promise that arbitrary Python edits are transactional.
+
+`get_report_view(max_chars=20000)` returns the retained Report view tail and
+`total_chars`/`omitted_chars`. It preserves warnings, tracebacks, and surrounding
+output without clearing the view or assigning guessed severity. An unavailable
+view is an error, while an empty view is a successful empty result. The log is
+session history, not a current model verdict or a persistent log file.
+
+Report retrieval needs the GUI thread. After timeouts, first use
+`get_rpc_status`; inspect the log and document once dispatch is available.
+A timeout does not cancel a running operation. Existing dispatch tests cover
+busy/stuck/completed states. `tests/freecad_diagnostics_integration.py` exposes
+`run()` for GUI-thread tests of the actual sketch APIs, units, expression/cycle
+rollback, and Report view. It creates and closes its own disposable document.

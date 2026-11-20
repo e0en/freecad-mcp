@@ -228,6 +228,17 @@ class FreeCADRPC:
                 return {"success": True, "job": dict(job)}
             return {"success": True, "jobs": [dict(j) for j in _ASYNC_JOBS.values()]}
 
+    def get_report_view(self, max_chars: int = 20000) -> dict[str, Any]:
+        from PySide import QtWidgets
+
+        from rpc_server.diagnostics import read_report_view
+
+        return _query_on_gui(
+            lambda: read_report_view(FreeCADGui.getMainWindow(), QtWidgets, max_chars),
+            "get_report_view",
+            self._generation,
+        )
+
     def document_workflow(
         self, doc_name: str, action: str, options: dict[str, Any]
     ) -> dict[str, Any]:

@@ -196,7 +196,8 @@ def inspect_document(
     Use include_property_names to discover available scalar properties.
     Filter exact type_ids and glob name_pattern before pagination.
     Omit properties to avoid loading property values. Expressions are included
-    for requested properties. Document errors are reported across the document.
+    for requested properties. unit is null for values without physical units,
+    including PropertyFloat. Document errors are reported across the document.
     """
     return _workflow(
         doc_name,
@@ -209,6 +210,41 @@ def inspect_document(
         type_ids=type_ids,
         name_pattern=name_pattern,
     )
+
+
+@tool
+def inspect_sketch(
+    doc_name: str,
+    object_name: str,
+    offset: int = 0,
+    limit: int = 100,
+) -> list[TextContent]:
+    """Read paginated sketch constraints, attachment, dependencies and expressions.
+
+    No solve, recompute or document mutation. Follow next_offset until null.
+    Indices are zero-based. driving is the stored constraint flag; geometric
+    constraints are not datum measurements. Status/errors reflect current state,
+    including pending recompute, rather than a new solver validation.
+    """
+    return _workflow(
+        doc_name, "sketch", object_name=object_name, offset=offset, limit=limit
+    )
+
+
+@tool
+def get_report_view(max_chars: int = 20000) -> list[TextContent]:
+    """Read the tail of FreeCAD's retained Report view without clearing it.
+
+    max_chars: 1–100000. omitted_chars reports truncation; text includes warnings,
+    tracebacks and surrounding output, without guessing severity or current errors.
+    Requires the GUI thread: after a timeout first query get_rpc_status. This is
+    retained session text, not a persistent log or proof of background completion.
+    """
+    result = get_freecad_connection().get_report_view(max_chars)
+    message = json.dumps(result, ensure_ascii=False)
+    if not result.get("success"):
+        return error_response(message)
+    return text_response(message)
 
 
 @tool
@@ -684,6 +720,12 @@ def execute_code(
     timeout: PositiveTimeout | None = None,
 ) -> list[TextContent | ImageContent]:
     """Execute arbitrary Python code in FreeCAD.
+
+    Runs on the GUI thread. Prefer inspect_document/inspect_sketch for reads and
+    update_parameters for transactional scalar edits. Success means the script
+    returned, not that recomputed geometry is valid. After failure, inspect
+    get_rpc_status, then get_report_view and document state before retrying.
+    A timeout does not cancel the operation; do not move document work to async.
 
     Args:
         code: The Python code to execute.
