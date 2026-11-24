@@ -218,9 +218,44 @@ output without clearing the view or assigning guessed severity. An unavailable
 view is an error, while an empty view is a successful empty result. The log is
 session history, not a current model verdict or a persistent log file.
 
-Report retrieval needs the GUI thread. After timeouts, first use
-`get_rpc_status`; inspect the log and document once dispatch is available.
-A timeout does not cancel a running operation. Existing dispatch tests cover
-busy/stuck/completed states. `tests/freecad_diagnostics_integration.py` exposes
+### GUI dispatch timeouts
+
+Keep the 90-second `execute_code` limit. Use `update_parameters` for supported
+scalar edits. On a working copy, split complex changes into short calls for
+feature edits, explicit recompute, validation, and save. Keep dependent edits
+within one transaction. Use `execute_code_async` for long Boolean or motion
+checks on independent shapes copied on the GUI thread and check an explicit
+completion result. Perform document reads and writes, recompute, and save on
+the GUI thread.
+
+After a timeout, call `get_rpc_status` first. A queued request that expired
+before starting is skipped. A running request can continue to modify or save
+the document. Wait for it to finish, then verify the affected objects and save
+state before retrying. `healthy` reports the absence of an active tracked
+operation. Release mouse buttons and close popups or modals, then try a short
+read and retrieve Report view when the GUI responds.
+
+For repeated timeouts, confirm which addon FreeCAD loaded and reproduce on a
+saved copy, one operation at a time. `gui_dispatch.last_timeout` preserves the
+latest timed-out request even after subsequent successful reads.
+`last_completed` holds the most recent finished task, including tasks that
+returned errors. Entries are empty until an applicable event occurs. Each entry
+includes the operation and task ID. Timestamps are server monotonic seconds.
+
+| Field | Meaning |
+| --- | --- |
+| `queued_at` | Request entered GUI dispatch |
+| `qt_wake_at` | Latest Qt wake observed while the request was queued, when available |
+| `deferred_at`, `deferred_by` | Latest mouse button, popup, or modal deferral observed in that queue window |
+| `started_at` | GUI callable started. Absent on a timeout before start |
+| `timed_out_at` | The RPC handler stopped waiting |
+| `finished_at`, `response_ready_at` | The GUI callable exited and its response became ready in the dispatcher. These can appear after a timeout |
+
+Wake and deferral observations cover the shared GUI queue. The response-ready
+time ends at the dispatcher and excludes network and MCP client time. If
+interactive GUI work repeatedly delays short reads, use a separate FreeCAD
+instance and document copy for automation.
+
+`tests/freecad_diagnostics_integration.py` exposes
 `run()` for GUI-thread tests of the actual sketch APIs, units, expression/cycle
 rollback, and Report view. It creates and closes its own disposable document.

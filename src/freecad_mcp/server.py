@@ -938,6 +938,9 @@ def get_rpc_status(ctx: Context) -> list[TextContent]:
     is still running and indicates that FreeCAD may need to be restarted.
     ``version_check`` is "ok" or says whether the addon or the server needs
     updating.
+    ``last_timeout`` and ``last_completed`` show dispatch timestamps. A timeout
+    without ``started_at`` expired in the queue. A timed-out operation with
+    ``started_at`` can still modify the document. Verify its effects before retrying.
     """
     return get_rpc_status_operation(get_freecad_connection())
 

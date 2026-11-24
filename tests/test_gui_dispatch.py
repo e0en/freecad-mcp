@@ -170,7 +170,12 @@ def test_running_timeout_blocks_followups_until_task_finishes() -> None:
 
         assert second["code"] == "GUI_DISPATCH_STUCK"
         assert elapsed < 0.1
-        assert gui_dispatch.get_dispatch_status()["state"] == "stuck"
+        status = gui_dispatch.get_dispatch_status()
+        assert status["state"] == "stuck"
+        trace = status["last_timeout"]
+        assert trace["operation"] == "remove_broken_feature"
+        assert trace["queued_at"] <= trace["started_at"] <= trace["timed_out_at"]
+        assert "finished_at" not in trace
 
         release.set()
         waker.join()
@@ -184,6 +189,12 @@ def test_running_timeout_blocks_followups_until_task_finishes() -> None:
         waker.join()
 
         assert third == "recovered"
+        status = gui_dispatch.get_dispatch_status()
+        trace = status["last_timeout"]
+        assert (
+            trace["timed_out_at"] <= trace["finished_at"] <= trace["response_ready_at"]
+        )
+        assert status["last_completed"]["operation"] == "recovered_call"
 
 
 def test_queued_timeout_cancels_task_without_marking_dispatch_stuck() -> None:
@@ -201,7 +212,27 @@ def test_queued_timeout_cancels_task_without_marking_dispatch_stuck() -> None:
         assert "code" not in result
         assert "waiting for 'stale_call' to start" in result["error"]
         assert not ran.is_set()
-        assert gui_dispatch.get_dispatch_status()["state"] == "healthy"
+        status = gui_dispatch.get_dispatch_status()
+        assert status["state"] == "healthy"
+        trace = status["last_timeout"]
+        assert trace["operation"] == "stale_call"
+        assert trace["queued_at"] <= trace["timed_out_at"]
+        assert "started_at" not in trace
+        assert "qt_wake_at" not in trace
+
+
+def test_queued_timeout_reports_qt_wake_and_modal_deferral(monkeypatch) -> None:
+    with load_gui_dispatch() as gui_dispatch:
+        gui_dispatch.init_waker()
+        monkeypatch.setattr(FakeApplication, "activeModalWidget", staticmethod(object))
+
+        gui_dispatch.dispatch_to_gui(lambda: True, queue_timeout=0.01, operation_name="query")
+
+        trace = gui_dispatch.get_dispatch_status()["last_timeout"]
+        assert trace["deferred_by"] == "modal"
+        assert trace["queued_at"] <= trace["qt_wake_at"] <= trace["deferred_at"]
+        assert trace["deferred_at"] <= trace["timed_out_at"]
+        assert "started_at" not in trace
 
 
 def test_run_budget_counts_from_task_start_not_from_enqueue() -> None:

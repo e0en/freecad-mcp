@@ -63,6 +63,11 @@ _lifecycle_lock = threading.RLock()
 _pending: dict[str, Callable[[], None]] = {}
 _task_history = TaskHistory()
 _last_tick: float | None = None
+_trace_lock = threading.Lock()
+_last_completed: dict[str, Any] = {}
+_last_timeout: dict[str, Any] = {}
+_last_qt_wake_at: float | None = None
+_last_observed_defer: tuple[str, float, str] | None = None
 
 # Qt can miss a mouse-release when the button is released outside the FreeCAD
 # window (drag out of the viewport, release there). QApplication.mouseButtons()
@@ -79,7 +84,7 @@ _stale_mouse_warned = False
 # Why and when the last tick declined to process, recorded on the GUI thread so
 # the RPC thread can report it on timeout without touching Qt off-thread. One
 # tuple assignment keeps reason and time consistent without a lock.
-_last_defer: "tuple[str, float] | None" = None
+_last_defer: tuple[str, float, str] | None = None
 
 
 def _mouse_guard_should_defer(mouse_down: bool, now: float) -> bool:
@@ -130,6 +135,8 @@ class _WakeSignal(QtCore.QObject):
         self._sig.emit()
 
     def _on_wake(self) -> None:
+        global _last_qt_wake_at
+        _last_qt_wake_at = time.monotonic()
         process_gui_tasks()
 
 
@@ -194,19 +201,19 @@ def _flush_gui_events(delay_ms: int = 20) -> None:
 
 def _ui_should_defer() -> bool:
     """Sample GUI blockers even while idle and between queued callbacks."""
-    global _last_defer
+    global _last_defer, _last_observed_defer
     now = time.monotonic()
     mouse_down = QtWidgets.QApplication.mouseButtons() != QtCore.Qt.NoButton
     if _mouse_guard_should_defer(mouse_down, now):
-        _last_defer = ("mouse buttons held (3D navigation drag)", now)
+        _last_defer = _last_observed_defer = ("mouse buttons held (3D navigation drag)", now, "mouse_button")
         return True
     if mouse_down:
         _warn_stale_mouse_once()
     if QtWidgets.QApplication.activePopupWidget() is not None:
-        _last_defer = ("a popup or context menu is open in FreeCAD", now)
+        _last_defer = _last_observed_defer = ("a popup or context menu is open in FreeCAD", now, "popup")
         return True
     if QtWidgets.QApplication.activeModalWidget() is not None:
-        _last_defer = ("a modal dialog is open in FreeCAD", now)
+        _last_defer = _last_observed_defer = ("a modal dialog is open in FreeCAD", now, "modal")
         return True
     _last_defer = None
     return False
@@ -339,7 +346,21 @@ def get_dispatch_status() -> dict[str, Any]:
         snapshot["heartbeat_stale"] = age is None or age > 2.0
         snapshot["ready"] = (snapshot["state"] == "healthy" and not _processing
                              and not snapshot["heartbeat_stale"])
+    with _trace_lock:
+        snapshot["last_completed"] = _last_completed.copy()
+        snapshot["last_timeout"] = _last_timeout.copy()
     return snapshot
+
+
+def _record_gui_observations(trace: dict[str, Any], observed_at: float) -> None:
+    """Capture shared GUI observations within this task's queue window."""
+    wake_at = _last_qt_wake_at
+    deferral = _last_observed_defer
+    if wake_at is not None and trace["queued_at"] <= wake_at <= observed_at:
+        trace["qt_wake_at"] = wake_at
+    if deferral is not None and trace["queued_at"] <= deferral[1] <= observed_at:
+        trace["deferred_at"] = deferral[1]
+        trace["deferred_by"] = deferral[2]
 
 
 def get_task_status(task_id: str | None = None) -> dict[str, Any]:
@@ -402,6 +423,8 @@ def dispatch_to_gui(
     Returns the task's return value on success, an error string if the task
     raises, or ``{"success": False, "error": ...}`` on timeout.
     """
+    global _last_timeout
+
     for name, budget in (("timeout", timeout), ("queue_timeout", queue_timeout)):
         if name == "queue_timeout" and budget is None:
             continue
@@ -438,12 +461,22 @@ def dispatch_to_gui(
     cancelled = False
     generation = dispatch_generation()
 
+    queued_at = time.monotonic()
+    trace: dict[str, Any] = {"task_id": task_id, "operation": operation, "queued_at": queued_at}
+
     def cancel(reason: str = "stopped") -> None:
+        global _last_timeout
         nonlocal cancelled
         with state_lock:
             if started_at is not None or cancelled:
                 return
             cancelled = True
+            if reason == "queue_timeout":
+                timed_out_at = time.monotonic()
+                _record_gui_observations(trace, timed_out_at)
+                with _trace_lock:
+                    trace["timed_out_at"] = timed_out_at
+                    _last_timeout = trace
             _task_history.update(task_id, state="cancelled", mutation_outcome="not_started",
                                  cancellation_reason=reason, caller_timed_out=reason == "queue_timeout")
             if on_cancel:
@@ -451,6 +484,7 @@ def dispatch_to_gui(
             started_event.set()
 
     def _wrapped() -> None:
+        global _last_completed
         nonlocal started_at
         with _lifecycle_lock:
             if generation != _heartbeat_generation or _shutdown_requested:
@@ -460,6 +494,8 @@ def dispatch_to_gui(
                 if cancelled:
                     return
                 started_at = time.monotonic()
+                _record_gui_observations(trace, started_at)
+                trace["started_at"] = started_at
                 _task_history.update(task_id, state="running", started=time.time())
                 _dispatch_health.start(task_id, operation)
                 started_event.set()
@@ -479,15 +515,20 @@ def dispatch_to_gui(
                 failed = True
                 log_error(f"MCP RPC: GUI task raised {res}\n{traceback.format_exc()}")
         finally:
+            finished_at = time.monotonic()
             # Publish completion atomically with clearing health, so a deadline
             # racing with completion cannot report a missing successful result.
             with state_lock:
                 _task_history.finish(task_id, res, failed)
                 _dispatch_health.finish(task_id)
+                with _trace_lock:
+                    trace["finished_at"] = finished_at
+                    if res is not missing:
+                        trace["response_ready_at"] = time.monotonic()
+                    _last_completed = trace
                 if res is not missing:
                     response_queue.put_nowait(res)
 
-    queued_at = time.monotonic()
     with _lifecycle_lock:
         if _shutdown_requested or generation != _heartbeat_generation or (
             expected_generation is not None and expected_generation != generation
@@ -553,6 +594,9 @@ def dispatch_to_gui(
             except queue.Empty:
                 stuck = _dispatch_health.mark_timed_out(task_id, timeout)
                 if stuck is not None:
+                    with _trace_lock:
+                        trace["timed_out_at"] = time.monotonic()
+                        _last_timeout = trace
                     _task_history.update(task_id, state="timed_out_running", caller_timed_out=True,
                                          mutation_outcome="still_running")
                     failure = stuck_failure(stuck, just_timed_out=True)
