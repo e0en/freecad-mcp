@@ -173,6 +173,27 @@ def test_inspection_is_bounded_and_does_not_recompute(doc):
     assert not workflow.run(doc, "inspect", {"objects": []})["success"]
 
 
+def test_inspection_includes_references_only_when_requested(doc):
+    param = doc.Objects[0]
+    param.OutList = [
+        SimpleNamespace(Document=SimpleNamespace(Name="SourceDoc"), Name="Source")
+    ]
+    param.InList = [SimpleNamespace(Document=doc, Name="Consumer")]
+    param.ExpressionEngine = [("Width", "Source.Length")]
+
+    plain = workflow.run(doc, "inspect", {"objects": ["Params"]})
+    assert "references" not in plain["objects"][0]
+    inspected = workflow.run(
+        doc, "inspect", {"objects": ["Params"], "include_references": True}
+    )
+    assert inspected["objects"][0]["references"] == {
+        "sources": [{"document": "SourceDoc", "name": "Source"}],
+        "consumers": [{"document": doc.Name, "name": "Consumer"}],
+        "expressions": [("Width", "Source.Length")],
+    }
+    assert doc.recomputed == 0
+
+
 def test_stale_state_cannot_pass_check(doc):
     obj = doc.Objects[0]
     obj.TypeId = "Sketcher::SketchObject"
@@ -210,9 +231,22 @@ def test_mcp_routes_one_rpc_and_preserves_error_details(monkeypatch):
         "get_freecad_connection",
         lambda: SimpleNamespace(document_workflow=request),
     )
-    response = server.inspect_document("Any", limit=7)
+    response = server.inspect_document("Any", limit=7, include_references=True)
     assert json.loads(response[0].text)["success"]
     assert calls[0][0:2] == ("Any", "inspect") and calls[0][2]["limit"] == 7
+    assert calls[0][2]["include_references"] is True
+    server.compare_geometry(
+        "Baseline", "Edited", [server.GeometryPair(baseline="Box", edited="Link")]
+    )
+    assert calls[1] == (
+        "Baseline",
+        "compare",
+        {
+            "edited_doc_name": "Edited",
+            "pairs": [{"baseline": "Box", "edited": "Link"}],
+            "tolerance_mm3": 1e-6,
+        },
+    )
     monkeypatch.setattr(
         server,
         "get_freecad_connection",

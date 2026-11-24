@@ -14,6 +14,8 @@
 | `delete_object` | Delete an object from a document. |
 | `get_objects` | Get all objects in a document. |
 | `get_object` | Get one object in a document. |
+| `inspect_document` | Page through object identities, with optional scalar properties and direct references. |
+| `compare_geometry` | Compare pairs of final solids and report added and removed volumes. |
 | `get_view` | Get a screenshot of the active view. |
 | `execute_code` | Execute Python code on FreeCAD's GUI thread. |
 | `execute_code_async` | Start a background computation and return its job ID; use `commit()` for document and view access. |
@@ -26,6 +28,7 @@
 
 See [code execution](execution.md) for execution modes, shared script state,
 background job tracking, and timeout handling.
+See [the CAD workflow guide](efficient-workflow.md) for inspection and geometry checks.
 
 ## Screenshot options
 

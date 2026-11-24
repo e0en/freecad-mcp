@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any, AsyncIterator, Callable, Dict, Literal
 
 import anyio
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 try:
     # mcp 1.x
@@ -64,6 +64,12 @@ ViewName = Literal[
 ]
 PositiveTimeout = Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]
 FemTimeout = Annotated[int, Field(strict=True, gt=0, le=2**31 - 1)]
+
+
+class GeometryPair(BaseModel):
+    baseline: str
+    edited: str
+
 
 state = ServerState()
 
@@ -188,12 +194,15 @@ def inspect_document(
     include_property_names: bool = False,
     type_ids: list[str] | None = None,
     name_pattern: str | None = None,
+    include_references: bool = False,
 ) -> list[TextContent]:
     """Read compact paginated object identities and optional scalar properties.
 
     Use internal Names, not Labels. No screenshot or recompute. Follow next_offset
     until null. Quantity values use FreeCAD internal units; unit describes dimensions.
     Use include_property_names to discover available scalar properties.
+    Use include_references to read direct sources, consumers, and expressions.
+    Each source and consumer includes the document and internal object Name.
     Filter exact type_ids and glob name_pattern before pagination.
     Omit properties to avoid loading property values. Expressions are included
     for requested properties. unit is null for values without physical units,
@@ -209,6 +218,7 @@ def inspect_document(
         include_property_names=include_property_names,
         type_ids=type_ids,
         name_pattern=name_pattern,
+        **({"include_references": True} if include_references else {}),
     )
 
 
@@ -257,6 +267,30 @@ def measure_objects(doc_name: str, objects: list[str]) -> list[TextContent]:
     stale shapes are visible. No recompute, screenshots, tessellation or saving.
     """
     return _workflow(doc_name, "measure", objects=objects)
+
+
+@tool
+def compare_geometry(
+    baseline_doc_name: str,
+    edited_doc_name: str,
+    pairs: list[GeometryPair],
+    tolerance_mm3: float = 1e-6,
+) -> ToolResponse:
+    """Compare 1–200 pairs of final single solids in open, recomputed documents.
+
+    Map internal object Names with pairs such as [{"baseline":"Body","edited":"Body001"}].
+    Either document can be the same. Compares in document coordinates, including
+    placements of nested parts and links. Reports added and removed mm³ per pair.
+    Both volumes must be within tolerance for that pair to pass. The tool reads
+    current shapes and does not recompute, align, save, or modify either document.
+    """
+    return _workflow(
+        baseline_doc_name,
+        "compare",
+        edited_doc_name=edited_doc_name,
+        pairs=[pair.model_dump() for pair in pairs],
+        tolerance_mm3=tolerance_mm3,
+    )
 
 
 @tool

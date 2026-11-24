@@ -45,6 +45,11 @@ Quantities return a numeric `value` in FreeCAD internal units and their dimensio
 recomputes a document, changes visibility, exports files or creates a mesh.
 `pending_recompute` identifies stale document objects.
 
+Set `include_references: true` to return each selected object's direct sources,
+consumers, and stored expressions. Each source and consumer identifies its
+document and internal object Name. Expressions are returned as
+`[property, expression]` pairs, independent of the requested scalar properties.
+
 `measure_objects` accepts 1–200 explicit object Names:
 
 ```json
@@ -54,11 +59,32 @@ recomputes a document, changes visibility, exports files or creates a mesh.
 It returns per-object volume (mm³), area (mm²), axis-aligned bounds/size (mm), and
 solid/face/edge counts. With exactly two objects it also returns minimum shape
 distance (mm). Measurement responses also report document errors and pending
-recompute without modifying the document. Measurements account for enclosing App::Part placements. Select
-final Bodies or solid objects; selecting a Body and its Tip duplicates geometry.
-Meshes, arbitrary workbench objects without Shape, and face/edge selections are
-not supported by this tool. Assembly-specific Link transforms and scaled instances
-have not been validated; verify them before relying on these measurements.
+recompute without modifying the document. Measurements account for enclosing
+`App::Part` placements, including nested `App::Link` instances. Select final
+Bodies or solid objects. Selecting a Body and its Tip duplicates geometry.
+The tool requires an object with a Shape. Independently verify scaled instances
+and assembly-specific Link transforms.
+
+### Compare final geometry
+
+Use `compare_geometry` to verify that a refactor preserved final solids, or to
+measure material added and removed by an edit. Supply pairs of internal Names
+from open, recomputed documents. Both document names may refer to the same
+document. The comparison uses the documents' existing coordinate systems.
+
+```json
+{
+    "baseline_doc_name": "Baseline",
+    "edited_doc_name": "Edited",
+    "pairs": [{"baseline": "Housing", "edited": "Housing001"}],
+    "tolerance_mm3": 0.001
+}
+```
+
+Each pair reports `added_mm3` and `removed_mm3`. A comparison succeeds when
+the Boolean calculations complete, and `passed` requires both volumes to be
+within tolerance for every pair. Recompute both documents before comparing.
+The tool leaves their geometry, placements, and files as they are.
 
 ## Batch parameter changes
 

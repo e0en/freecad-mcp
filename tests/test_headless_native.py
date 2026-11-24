@@ -69,3 +69,11 @@ def test_native_property_contracts() -> None:
     reply = run_headless(code, 60, COMMAND)
     assert reply["success"], reply
     assert "NATIVE_PROPERTY_CONTRACTS_OK" in reply["output"], reply
+
+
+def test_native_geometry_comparison_with_nested_links() -> None:
+    scenario = Path(__file__).with_name("native") / "geometry_comparison.py"
+    code = f"import runpy; runpy.run_path({str(scenario)!r})['run_regression']()"
+    reply = run_headless(code, 60, COMMAND)
+    assert reply["success"], reply
+    assert "NATIVE_GEOMETRY_COMPARISON_OK" in reply["output"], reply

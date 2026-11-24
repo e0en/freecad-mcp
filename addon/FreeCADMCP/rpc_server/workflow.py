@@ -8,6 +8,7 @@ from fnmatch import fnmatchcase
 from itertools import combinations
 import math
 from time import perf_counter
+from typing import Any
 
 
 SCALAR_TYPES = {
@@ -76,6 +77,7 @@ def inspect_document(
     include_property_names=False,
     type_ids=None,
     name_pattern=None,
+    include_references: bool = False,
 ):
     """Page through object identities; opt into named scalar properties."""
     if offset < 0 or not 1 <= limit <= 200:
@@ -92,6 +94,18 @@ def inspect_document(
     rows = []
     for obj in selected[offset : offset + limit]:
         row = {"name": obj.Name, "label": obj.Label, "type": obj.TypeId}
+        if include_references:
+            row["references"] = {
+                "sources": [
+                    {"document": source.Document.Name, "name": source.Name}
+                    for source in obj.OutList
+                ],
+                "consumers": [
+                    {"document": consumer.Document.Name, "name": consumer.Name}
+                    for consumer in obj.InList
+                ],
+                "expressions": list(getattr(obj, "ExpressionEngine", [])),
+            }
         if include_property_names:
             row["scalar_properties"] = [
                 name
@@ -184,15 +198,83 @@ def _shape(obj):
     shape = getattr(obj, "Shape", None)
     if shape is None or shape.isNull():
         raise ValueError(f"No non-null Shape: {obj.Name}")
-    # Object.Shape uses the object's Placement, but not enclosing App::Part
-    # placements. Work in document coordinates, including enclosing containers.
     shape = shape.copy()
-    shape.Placement = (
-        obj.getGlobalPlacement()
-        .multiply(obj.Placement.inverse())
-        .multiply(shape.Placement)
-    )
+    if obj.TypeId == "App::Link":
+        # Link.Shape includes instance placement. Apply only the instance's
+        # enclosing coordinate system, never the linked source's ancestors.
+        parent = obj.getParentGeoFeatureGroup()
+        if parent is not None:
+            shape.Placement = parent.getGlobalPlacement().multiply(shape.Placement)
+    else:
+        shape.Placement = (
+            obj.getGlobalPlacement()
+            .multiply(obj.Placement.inverse())
+            .multiply(shape.Placement)
+        )
     return shape
+
+
+def compare_geometry(
+    baseline: Any,
+    edited_doc_name: str,
+    pairs: list[dict[str, str]],
+    tolerance_mm3: float = 1e-6,
+) -> dict[str, Any]:
+    """Compare current final solids in their respective document coordinates."""
+    import FreeCAD as App
+
+    if not 1 <= len(pairs) <= 200:
+        raise ValueError("Compare 1–200 pairs of internal object Names")
+    if not math.isfinite(tolerance_mm3) or tolerance_mm3 < 0:
+        raise ValueError("tolerance_mm3 must be finite and nonnegative")
+    edited = App.getDocument(edited_doc_name)
+    for doc in (baseline, edited):
+        if errors := _errors(doc):
+            raise ValueError(f"Document {doc.Name} has invalid objects: {errors}")
+        if pending := _pending(doc):
+            raise ValueError(f"Recompute document {doc.Name} before comparing: {pending}")
+
+    baseline_objects = _select(
+        baseline, list(dict.fromkeys(pair["baseline"] for pair in pairs))
+    )
+    edited_objects = _select(edited, list(dict.fromkeys(pair["edited"] for pair in pairs)))
+    shape_sets = []
+    for objects in (baseline_objects, edited_objects):
+        shapes = {}
+        for obj in objects:
+            shape = _shape(obj)
+            if not shape.isValid() or len(shape.Solids) != 1:
+                raise ValueError(
+                    f"Expected a valid single solid: {obj.Document.Name}.{obj.Name}"
+                )
+            shapes[obj.Name] = shape
+        shape_sets.append(shapes)
+    before, after = shape_sets
+
+    rows = []
+    for pair in pairs:
+        original, current = before[pair["baseline"]], after[pair["edited"]]
+        removed = original.cut(current).Volume
+        added = current.cut(original).Volume
+        if not all(math.isfinite(value) and value >= 0 for value in (removed, added)):
+            raise ValueError(f"Invalid Boolean difference volume for {pair}")
+        rows.append(
+            {
+                "baseline": pair["baseline"],
+                "edited": pair["edited"],
+                "removed_mm3": removed,
+                "added_mm3": added,
+                "passed": max(removed, added) <= tolerance_mm3,
+            }
+        )
+    return {
+        "baseline_document": baseline.Name,
+        "edited_document": edited.Name,
+        "tolerance_mm3": tolerance_mm3,
+        "checked": len(rows),
+        "passed": all(row["passed"] for row in rows),
+        "pairs": rows,
+    }
 
 
 def _metrics(obj, shape):
@@ -508,6 +590,7 @@ def run(doc, action, options):
         "inspect": inspect_document,
         "sketch": inspect_sketch,
         "measure": measure_objects,
+        "compare": compare_geometry,
         "check": check_document,
         "update": update_parameters,
     }
